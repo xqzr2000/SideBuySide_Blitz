@@ -1,4 +1,5 @@
 import { extractProductFromPage } from './product-extractor.js';
+import { recordShelfEvent } from './history-log.js';
 
 const MENU_ID = 'add-to-sidebuyside';
 
@@ -47,6 +48,7 @@ async function saveProduct(product, tab) {
     : [nextItem, ...items];
 
   await chrome.storage.local.set({ items: next });
+  await recordShelfEvent('added', nextItem);
   return nextItem;
 }
 
@@ -80,6 +82,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const allTabs = await chrome.tabs.query({}).catch(() => []);
       targetTab = allTabs.find((candidate) => candidate.url === item.url) || null;
     }
+
+    await recordShelfEvent('cart', item);
 
     if (!targetTab) {
       const opened = await chrome.tabs.create({ url: item.url, active: true });

@@ -1,3 +1,5 @@
+import { readShelfHistory, recordShelfEvent } from './history-log.js';
+
 const shelfView = document.getElementById('shelfView');
 const chatView = document.getElementById('chatView');
 const cards = document.getElementById('cards');
@@ -60,6 +62,7 @@ async function loadItems() {
   dealsByItem = data.deals && typeof data.deals === 'object' ? data.deals : {};
   renderCards();
   renderChat();
+  scheduleMemorySync();
 }
 
 function bestDealFor(id) {
@@ -164,6 +167,41 @@ function offerLine(offer) {
     </li>`;
 }
 
+function recommendationLine(entry) {
+  const price = entry.price === null || entry.price === undefined
+    ? ''
+    : `<div class="offer-price">${escapeHtml(formatMoney(entry.price, entry.currency))}</div>`;
+  const because = (entry.becauseYouSaved || []).length
+    ? `<div class="offer-meta">Because you saved ${escapeHtml(entry.becauseYouSaved.join(', '))}</div>`
+    : '';
+  const title = entry.url
+    ? `<a class="offer-title" href="${escapeHtml(entry.url)}" target="_blank" rel="noreferrer">${escapeHtml(entry.name || entry.url)}</a>`
+    : `<div class="offer-title">${escapeHtml(entry.name || 'Unnamed product')}</div>`;
+
+  return `
+    <li class="offer">
+      ${title}
+      <div class="offer-meta">${escapeHtml(entry.site || '')}</div>
+      ${price}
+      ${because}
+      <div class="chips">
+        <span class="chip">${entry.source === 'web' ? 'new find' : 'from your history'}</span>
+        <span class="chip">fit ${escapeHtml(String(Math.round((entry.fitScore || 0) * 100)))}</span>
+      </div>
+    </li>`;
+}
+
+function addRecommendationsElement(action) {
+  const block = document.createElement('div');
+  block.className = 'message assistant offers-block';
+  block.innerHTML = `
+    <div class="offers-head">Picked from your shelf history</div>
+    ${action.query ? `<div class="offers-sub">matching “${escapeHtml(action.query)}”${action.profileStrength === 'thin' ? ' · thin profile' : ''}</div>` : ''}
+    <ul class="offers">${action.items.map(recommendationLine).join('')}</ul>`;
+  chatMessages.appendChild(block);
+  block.scrollIntoView({ block: 'end' });
+}
+
 function addOffersElement(action) {
   const block = document.createElement('div');
   block.className = 'message assistant offers-block';
@@ -222,10 +260,15 @@ function showDetails(item) {
 }
 
 async function removeItem(id) {
+  const removed = currentItems.find((item) => item.id === id);
   currentItems = currentItems.filter((item) => item.id !== id);
   delete dealsByItem[id];
   await chrome.storage.local.set({ items: currentItems, deals: dealsByItem });
+  // The card leaves the shelf but stays in SideKick's memory as a product
+  // that was considered and dropped.
+  if (removed) await recordShelfEvent('removed', removed);
   renderCards();
+  scheduleMemorySync();
 }
 
 async function addToCart(item) {
@@ -248,6 +291,7 @@ cards.addEventListener('click', async (event) => {
   if (button.dataset.action === 'details') showDetails(item);
   if (button.dataset.action === 'cart') await addToCart(item);
   if (button.dataset.action === 'deals') {
+    await recordShelfEvent('deal', item);
     showChat();
     await sendToSideKick(`Search the web for a better deal on "${item.name}" (item id ${item.id}). Verify the prices you find and tell me whether any of them actually beats what I saved.`);
   }
@@ -296,6 +340,10 @@ async function applyActions(actions = []) {
       itemsChanged = true;
     }
 
+    if (action?.type === 'recommendations' && Array.isArray(action.items)) {
+      addRecommendationsElement(action);
+    }
+
     if (action?.type === 'offers' && action.itemId) {
       dealsByItem[action.itemId] = {
         itemName: action.itemName || '',
@@ -312,6 +360,36 @@ async function applyActions(actions = []) {
   if (itemsChanged) await chrome.storage.local.set({ items: currentItems });
   if (dealsChanged) await chrome.storage.local.set({ deals: dealsByItem });
   if (itemsChanged || dealsChanged) renderCards();
+}
+
+let memorySyncTimer = null;
+
+/**
+ * Push the shelf and its event log to the backend so the vector index matches what
+ * the panel holds. Best effort: the backend is often simply not running.
+ */
+async function syncMemory() {
+  try {
+    const { apiBaseUrl, apiToken } = await getBackendConfig();
+    const response = await fetch(`${apiBaseUrl}/api/history/sync`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {})
+      },
+      body: JSON.stringify({ items: currentItems, shelfHistory: await readShelfHistory() })
+    });
+    if (!response.ok) return null;
+    const data = await response.json().catch(() => ({}));
+    return data.memory || null;
+  } catch {
+    return null;
+  }
+}
+
+function scheduleMemorySync() {
+  clearTimeout(memorySyncTimer);
+  memorySyncTimer = setTimeout(syncMemory, 1500);
 }
 
 async function getBackendConfig() {
@@ -342,7 +420,7 @@ async function sendToSideKick(content) {
         'Content-Type': 'application/json',
         ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {})
       },
-      body: JSON.stringify({ history, items: currentItems })
+      body: JSON.stringify({ history, items: currentItems, shelfHistory: await readShelfHistory() })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `Server returned ${response.status}.`);
@@ -375,6 +453,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.items) currentItems = changes.items.newValue || [];
   if (changes.deals) dealsByItem = changes.deals.newValue || {};
   if (changes.items || changes.deals) renderCards();
+  if (changes.items) scheduleMemorySync();
 });
 
 loadItems();

@@ -3,6 +3,9 @@ import { loadEnvFile } from 'node:process';
 import { runSideKick } from './agent.js';
 import { toolDefinitions } from './tools.js';
 import { searchStatus } from './search.js';
+import { embeddingStatus } from './embeddings.js';
+import { getDefaultStore } from './vectorstore.js';
+import { buildTasteProfile, syncShelfHistory } from './history.js';
 
 try {
   loadEnvFile(new URL('../.env', import.meta.url));
@@ -19,7 +22,7 @@ function sendJson(res, status, body) {
     'Content-Length': Buffer.byteLength(payload),
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS'
   });
   res.end(payload);
 }
@@ -58,7 +61,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS'
     });
     return res.end();
   }
@@ -74,6 +77,8 @@ const server = http.createServer(async (req, res) => {
       openRouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
       model: process.env.OPENROUTER_MODEL || 'openai/gpt-5-mini',
       search,
+      embeddings: embeddingStatus(process.env),
+      memory: (await getDefaultStore(process.env)).stats(),
       tools: toolDefinitions.map((tool) => tool.function.name)
     });
   }
@@ -84,13 +89,62 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const history = Array.isArray(body?.history) ? body.history : [];
       const items = Array.isArray(body?.items) ? body.items : [];
+      const events = Array.isArray(body?.shelfHistory) ? body.shelfHistory : [];
       if (!history.length) return sendJson(res, 400, { error: 'history is required' });
-      const result = await runSideKick({ history, items });
-      return sendJson(res, 200, result);
+
+      const store = await getDefaultStore(process.env);
+      let memory = null;
+      try {
+        // Index before answering so SideKick's memory includes what was just saved.
+        memory = await syncShelfHistory({ items, events, store });
+      } catch (error) {
+        console.warn('Shelf history sync failed:', error.message);
+      }
+
+      const result = await runSideKick({ history, items, store });
+      return sendJson(res, 200, { ...result, memory });
     } catch (error) {
       console.error(error);
       return sendJson(res, error.statusCode || 500, { error: error.message || 'Unexpected server error' });
     }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/history/sync') {
+    if (!isAuthorized(req)) return sendJson(res, 401, { error: 'Unauthorized' });
+    try {
+      const body = await readJson(req);
+      const store = await getDefaultStore(process.env);
+      const memory = await syncShelfHistory({
+        items: Array.isArray(body?.items) ? body.items : [],
+        events: Array.isArray(body?.shelfHistory) ? body.shelfHistory : [],
+        store
+      });
+      return sendJson(res, 200, { ok: true, memory });
+    } catch (error) {
+      console.error(error);
+      return sendJson(res, error.statusCode || 500, { error: error.message || 'Unexpected server error' });
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/history/stats') {
+    if (!isAuthorized(req)) return sendJson(res, 401, { error: 'Unauthorized' });
+    const store = await getDefaultStore(process.env);
+    const profile = buildTasteProfile(store);
+    const { vector, negativeVector, ...readable } = profile;
+    return sendJson(res, 200, {
+      ok: true,
+      memory: store.stats(),
+      embeddings: embeddingStatus(process.env),
+      profile: readable
+    });
+  }
+
+  if (req.method === 'DELETE' && url.pathname === '/api/history') {
+    if (!isAuthorized(req)) return sendJson(res, 401, { error: 'Unauthorized' });
+    const store = await getDefaultStore(process.env);
+    const cleared = store.clear();
+    await store.save();
+    return sendJson(res, 200, { ok: true, cleared });
   }
 
   return sendJson(res, 404, { error: 'Not found' });

@@ -43,6 +43,34 @@ Results come back into the side panel as deal cards with a confirmed/unconfirmed
 
 Outbound fetches are restricted to public http(s) addresses: private, loopback, and link-local targets are refused, redirects are re-validated at every hop, and responses are size- and time-capped.
 
+### Remember the shelf and recommend from it
+
+The side panel keeps an append-only log of what you save, cart, remove, and hunt deals on. The backend folds that log into a vector database — one record per product, carrying its facts, its interaction history, and an embedding of its description — so SideKick can search what you have shopped for by meaning rather than by exact words.
+
+| Tool | What it does |
+| --- | --- |
+| `search_history` | Semantic search across every product ever saved, including cards you removed. Filter by store, brand, category, or whether it is still on the shelf. |
+| `similar_items` | The nearest neighbours of one card or of a description — what you already considered before. |
+| `taste_profile` | Favourite brands, stores, and categories, recurring themes, and the price range you actually shop in per category. |
+| `recommend_products` | Ranks past items you never kept against your taste profile, and with `include_web` also searches the internet and re-ranks the findings by profile fit. |
+
+Each interaction is weighted by what it says and how recent it is: carting a product counts for far more than saving it, and a removal that was never reversed pushes a product down instead of being averaged away. Every recommendation names the saved items that justify it, so a suggestion can be checked rather than taken on faith.
+
+Removing a card takes it off the shelf but keeps it in memory — that is what makes "you looked at three of these and bought none" possible. **Settings → Forget shelf history** deletes the index and the local log.
+
+#### Embeddings
+
+Embeddings are pluggable, and the default needs no account: a built-in offline encoder that hashes tokens and character n-grams. It matches wording rather than meaning, and SideKick is told to say so. Set one key below for real semantic search — the index notices the change and re-embeds itself on the next sync.
+
+| Provider | Key | Model |
+| --- | --- | --- |
+| OpenAI | `OPENAI_API_KEY` | `text-embedding-3-small` |
+| Voyage | `VOYAGE_API_KEY` | `voyage-3-lite` |
+| Jina | `JINA_API_KEY` | `jina-embeddings-v3` |
+| Cohere | `COHERE_API_KEY` | `embed-english-v3.0` |
+
+If a hosted provider errors, embedding falls back to the offline encoder rather than failing the request. The index lives in `backend/data/shelf-vectors.json` (override with `VECTOR_STORE_PATH`) — it is your shopping history, it stays on your own backend, and it is gitignored.
+
 ## Setup
 
 ```bash
@@ -52,6 +80,16 @@ npm test                               # backend test suite
 ```
 
 Then load `extension/` as an unpacked extension (`chrome://extensions` → Developer mode → Load unpacked) and point **Settings** at the backend URL.
+
+### API
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Model, search provider, embedding provider, memory stats, tool list. |
+| `POST /api/chat` | `{ history, items, shelfHistory }` → SideKick's reply, the tool trace, and the shelf actions to apply. Indexes the history before answering. |
+| `POST /api/history/sync` | `{ items, shelfHistory }` → index the shelf history, embedding only what changed. |
+| `GET /api/history/stats` | Index stats and the readable taste profile. |
+| `DELETE /api/history` | Forget the indexed history. |
 
 ### Web search configuration
 

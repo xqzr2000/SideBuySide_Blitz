@@ -10,6 +10,9 @@ import {
 import { convert, loadRates, withNormalizedPrices } from './currency.js';
 import { fetchOffer } from './offers.js';
 import { searchStatus, searchWeb } from './search.js';
+import { cosineSimilarity, embedTexts, embeddingStatus, l2Normalize } from './embeddings.js';
+import { getDefaultStore } from './vectorstore.js';
+import { buildTasteProfile, describeItem, engagementScore, productKey } from './history.js';
 
 export { normalizeItems };
 
@@ -220,6 +223,75 @@ export const toolDefinitions = [
       }
     }
   }
+,
+  {
+    type: 'function',
+    function: {
+      name: 'search_history',
+      description: 'Semantic search over the shelf history vector database: everything the user has ever saved, including cards they later removed. Use it to answer "have I looked at X before?" and to ground recommendations in what they actually shop for.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What to look for, in plain language, e.g. "wireless noise cancelling headphones under 300".' },
+          top_k: { type: 'integer', description: 'How many matches to return (default 8, max 50).' },
+          status: { type: 'string', enum: ['any', 'on_shelf', 'past'], description: 'Limit to cards still on the shelf or ones already removed. Default any.' },
+          category: { type: 'string', description: 'Only this inferred category.' },
+          brand: { type: 'string', description: 'Only this brand.' },
+          site: { type: 'string', description: 'Only this store hostname.' },
+          diversify: { type: 'boolean', description: 'Spread results across different products instead of near-identical ones.' }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'similar_items',
+      description: 'Find the products in the shelf history that are nearest to one saved card or to a description. Use it to explain why something is being recommended, or to find what the user already considered.',
+      parameters: {
+        type: 'object',
+        properties: {
+          item_id: { type: 'string', description: 'A saved card to find neighbours for.' },
+          text: { type: 'string', description: 'A product description to match instead of a saved card.' },
+          top_k: { type: 'integer', description: 'How many neighbours to return (default 5).' },
+          scope: { type: 'string', enum: ['all', 'on_shelf', 'past'], description: 'Where to search. Default all.' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'taste_profile',
+      description: 'Summarize what the shelf history says the user likes: favourite brands, stores, categories, recurring themes, and the price range they actually shop in per category.',
+      parameters: {
+        type: 'object',
+        properties: {
+          target_currency: { type: 'string', enum: CURRENCY_ENUM, description: 'Currency for the spend figures.' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'recommend_products',
+      description: 'Recommend products using the shelf-history vector database. Ranks past items the user never bought against their taste profile, and with include_web also searches the internet and re-ranks the findings by how well they fit that profile. Every recommendation comes back with the saved items that justify it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Steer the recommendation, e.g. "a gift for a runner" or "upgrade my desk setup". Omit to recommend purely from the profile.' },
+          category: { type: 'string', description: 'Restrict to one inferred category.' },
+          max_price: { type: 'number', description: 'Budget ceiling in the target currency.' },
+          target_currency: { type: 'string', enum: CURRENCY_ENUM, description: 'Currency for budget and price comparisons.' },
+          top_k: { type: 'integer', description: 'How many recommendations to return (default 5, max 15).' },
+          include_web: { type: 'boolean', description: 'Also search the internet for new products and score them against the profile. Requires a configured search provider.' },
+          exclude_on_shelf: { type: 'boolean', description: 'Default true: do not recommend what is already on the shelf.' }
+        }
+      }
+    }
+  }
 ];
 
 function round(value, digits = 2) {
@@ -382,6 +454,89 @@ async function verifyOffers(results, deps, limit) {
       ...(confirmation.note ? { note: confirmation.note } : {})
     };
   });
+}
+
+/**
+ * Expand a query with the category it implies. The offline encoder matches wording,
+ * so sharing the category token is what lets "headphones" reach a saved pair of
+ * earbuds; for a semantic provider it is a harmless hint.
+ */
+function queryText(query) {
+  const text = String(query || '').trim();
+  const category = categoryFromName(text);
+  return category && category !== 'other' ? `${text} Category: ${category}.` : text;
+}
+
+async function resolveStore(context, env) {
+  return context.store || getDefaultStore(env);
+}
+
+function interactionCounts(events = []) {
+  const counts = {};
+  for (const event of events) counts[event.type] = (counts[event.type] || 0) + 1;
+  return counts;
+}
+
+function recordSummary(record) {
+  const meta = record.meta || {};
+  return {
+    recordId: record.id,
+    itemId: meta.itemId || '',
+    name: meta.name || '',
+    brand: meta.brand || '',
+    site: meta.site || '',
+    category: meta.category || '',
+    price: meta.price ?? null,
+    currency: meta.currency || '',
+    url: meta.url || '',
+    tags: meta.tags || [],
+    status: meta.status || 'past',
+    firstSeen: meta.firstSeen || null,
+    lastSeen: meta.lastSeen || null,
+    interactions: interactionCounts(meta.events)
+  };
+}
+
+function metaFilter({ status, category, brand, site }) {
+  return (record) => {
+    const meta = record.meta || {};
+    if (status && status !== 'any' && meta.status !== status) return false;
+    if (category && String(meta.category || '').toLowerCase() !== String(category).toLowerCase()) return false;
+    if (brand && !String(meta.brand || '').toLowerCase().includes(String(brand).toLowerCase())) return false;
+    if (site && !String(meta.site || '').toLowerCase().includes(String(site).toLowerCase())) return false;
+    return true;
+  };
+}
+
+function blendVectors(primary, secondary, weight) {
+  if (!primary?.length) return secondary || null;
+  if (!secondary?.length) return primary;
+  const length = Math.min(primary.length, secondary.length);
+  const blended = new Float64Array(length);
+  for (let index = 0; index < length; index += 1) {
+    blended[index] = primary[index] * weight + secondary[index] * (1 - weight);
+  }
+  return l2Normalize(blended);
+}
+
+/** Name the already-saved products that pulled a recommendation up the list. */
+function reasonsFor(vector, likedRecords, excludeId) {
+  return likedRecords
+    .filter((record) => record.id !== excludeId && record.vector?.length)
+    .map((record) => ({ name: record.meta?.name || '', score: round(cosineSimilarity(vector, record.vector), 3) }))
+    .filter((entry) => entry.name && entry.score > 0.15)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+}
+
+function profileQuery(profile, fallback = '') {
+  if (fallback) return fallback;
+  const parts = [
+    profile.topBrands[0]?.value,
+    profile.topCategories[0]?.value,
+    ...profile.themes.slice(0, 3)
+  ].filter(Boolean);
+  return parts.join(' ').slice(0, 160);
 }
 
 /**
@@ -788,6 +943,221 @@ export async function executeTool(name, args = {}, rawItems = [], context = {}) 
           ? `The best candidate is about ${best.savings} ${ranked.baseline.currency} cheaper (${best.savingsPercent}%)${best.confirmed ? '' : ', but that price is unconfirmed'}.`
           : 'Nothing found beats the saved price once shipping and currency are taken into account.',
       note: 'Report the caveats on an offer together with its price.'
+    });
+  }
+
+  if (name === 'search_history') {
+    const store = await resolveStore(context, env);
+    const query = String(args.query || '').trim();
+    if (!query) return done({ error: 'A search query is required.' });
+    if (!store.size) {
+      return done({ indexed: 0, results: [], note: 'The shelf history index is empty. Items are indexed as soon as the side panel syncs them.' });
+    }
+
+    const embedded = await embedTexts([queryText(query)], deps);
+    const results = store.query(embedded.vectors[0], {
+      topK: Math.min(Math.max(Number(args.top_k) || 8, 1), 50),
+      minScore: 0.05,
+      filter: metaFilter({ status: args.status, category: args.category, brand: args.brand, site: args.site }),
+      mmr: args.diversify ? 0.7 : 1
+    });
+
+    return done({
+      query,
+      indexed: store.size,
+      embedding: embeddingStatus(env),
+      count: results.length,
+      results: results.map((record) => ({ ...recordSummary(record), score: record.score })),
+      note: results.length
+        ? 'Scores are cosine similarity, not proof of a match. Read the names before relying on one.'
+        : 'Nothing in the shelf history is close to that query.'
+    });
+  }
+
+  if (name === 'similar_items') {
+    const store = await resolveStore(context, env);
+    let vector = null;
+    let excludeId = '';
+    let subject = '';
+
+    if (args.item_id) {
+      const item = items.find((entry) => entry.id === String(args.item_id));
+      if (!item) return done({ error: `No saved item with id ${args.item_id}.` });
+      subject = item.name;
+      excludeId = productKey(item);
+      const record = store.get(excludeId);
+      vector = record?.vector?.length ? record.vector : (await embedTexts([describeItem(item)], deps)).vectors[0];
+    } else if (args.text) {
+      subject = String(args.text).slice(0, 200);
+      vector = (await embedTexts([queryText(subject)], deps)).vectors[0];
+    } else {
+      return done({ error: 'Provide item_id or text.' });
+    }
+
+    const scope = args.scope === 'on_shelf' || args.scope === 'past' ? args.scope : 'any';
+    const results = store.query(vector, {
+      topK: Math.min(Math.max(Number(args.top_k) || 5, 1), 50),
+      minScore: 0.05,
+      filter: metaFilter({ status: scope }),
+      exclude: excludeId ? [excludeId] : null
+    });
+
+    return done({
+      subject,
+      indexed: store.size,
+      embedding: embeddingStatus(env),
+      results: results.map((record) => ({ ...recordSummary(record), score: record.score }))
+    });
+  }
+
+  if (name === 'taste_profile') {
+    const store = await resolveStore(context, env);
+    const profile = buildTasteProfile(store, { targetCurrency: args.target_currency });
+    const { vector, negativeVector, ...readable } = profile;
+    return done({
+      ...readable,
+      embedding: embeddingStatus(env),
+      note: profile.strength === 'insufficient'
+        ? 'Too little history to describe a taste yet. Say so instead of inferring preferences from two or three cards.'
+        : profile.strength === 'thin'
+          ? 'The profile is built on only a handful of products, so treat it as a weak signal.'
+          : 'Built from the shelf history, weighted by how recent each interaction is and whether the card was carted, removed, or kept.'
+    });
+  }
+
+  if (name === 'recommend_products') {
+    const store = await resolveStore(context, env);
+    const profile = buildTasteProfile(store, { targetCurrency: args.target_currency });
+    const query = String(args.query || '').trim();
+
+    if (!profile.vector && !query) {
+      return done({
+        recommendations: [],
+        profileStrength: profile.strength,
+        indexed: store.size,
+        note: 'There is no usable history yet and no query to work from. Ask the user what they are shopping for.'
+      });
+    }
+
+    const queryVector = query ? (await embedTexts([queryText(query)], deps)).vectors[0] : null;
+    const basis = query && profile.vector ? blendVectors(queryVector, profile.vector, 0.65) : (queryVector || profile.vector);
+    const topK = Math.min(Math.max(Number(args.top_k) || 5, 1), 15);
+    const excludeOnShelf = args.exclude_on_shelf !== false;
+    const targetCurrency = String(args.target_currency || '').toUpperCase();
+    const maxPrice = toNumber(args.max_price);
+
+    const withinBudget = (price, currency) => {
+      if (maxPrice === null || price === null || price === undefined) return true;
+      const from = String(currency || targetCurrency || 'USD').toUpperCase();
+      const converted = convert(price, from, targetCurrency || from, rates);
+      // An unconvertible currency is not a reason to hide a candidate outright.
+      return converted ? converted.value <= maxPrice : true;
+    };
+
+    const liked = store.all()
+      .filter((record) => record.vector?.length)
+      .map((record) => ({ ...record, engagement: engagementScore(record) }))
+      .filter((record) => record.engagement > 0);
+
+    const candidates = store.query(basis, {
+      topK: topK * 5,
+      minScore: 0.05,
+      filter: (record) => {
+        const meta = record.meta || {};
+        if (excludeOnShelf && meta.status === 'on_shelf') return false;
+        if (args.category && String(meta.category || '').toLowerCase() !== String(args.category).toLowerCase()) return false;
+        return withinBudget(meta.price, meta.currency);
+      },
+      mmr: 0.75
+    });
+
+    const fromHistory = candidates.map((record) => {
+      const penalty = profile.negativeVector ? cosineSimilarity(record.vector, profile.negativeVector) : 0;
+      const engagement = engagementScore(record);
+      return {
+        source: 'history',
+        ...recordSummary(record),
+        similarity: record.score,
+        fitScore: round(record.score - 0.3 * Math.max(0, penalty) + Math.min(0.1, Math.max(-0.1, engagement / 20)), 3),
+        becauseYouSaved: reasonsFor(record.vector, liked, record.id)
+      };
+    }).sort((a, b) => b.fitScore - a.fitScore).slice(0, topK);
+
+    let fromWeb = [];
+    let webError = '';
+    const status = searchStatus(env);
+
+    if (args.include_web) {
+      if (!status.configured) {
+        webError = status.setupHint;
+      } else {
+        const search = await searchWeb({ query: profileQuery(profile, query), maxResults: 8 }, deps);
+        if (!search.results.length) {
+          webError = search.error || 'The web search returned nothing usable.';
+        } else {
+          const fresh = search.results.filter((entry) => !store.get(productKey({ url: entry.url })));
+          const embedded = await embedTexts(fresh.map((entry) => `${entry.title}. ${entry.snippet}`), deps);
+          fromWeb = fresh.map((entry, index) => {
+            const vector = embedded.vectors[index] || [];
+            return {
+              source: 'web',
+              title: entry.title,
+              url: entry.url,
+              site: entry.site,
+              price: entry.price ?? null,
+              currency: entry.currency || '',
+              priceConfirmed: false,
+              fitScore: round(cosineSimilarity(basis, vector), 3),
+              becauseYouSaved: reasonsFor(vector, liked, '')
+            };
+          })
+            .filter((entry) => withinBudget(entry.price, entry.currency))
+            .sort((a, b) => b.fitScore - a.fitScore)
+            .slice(0, topK);
+        }
+      }
+    }
+
+    const recommendations = [...fromHistory, ...fromWeb].sort((a, b) => b.fitScore - a.fitScore).slice(0, topK);
+    if (recommendations.length) {
+      actions.push({
+        type: 'recommendations',
+        query: query || profileQuery(profile),
+        profileStrength: profile.strength,
+        items: recommendations.map((entry) => ({
+          name: entry.name || entry.title || '',
+          url: entry.url,
+          site: entry.site,
+          price: entry.price,
+          currency: entry.currency,
+          source: entry.source,
+          fitScore: entry.fitScore,
+          becauseYouSaved: (entry.becauseYouSaved || []).map((reason) => reason.name)
+        }))
+      });
+    }
+
+    return done({
+      basis: {
+        query: query || null,
+        usedProfile: Boolean(profile.vector),
+        profileStrength: profile.strength,
+        topBrands: profile.topBrands.slice(0, 3).map((entry) => entry.value),
+        topCategories: profile.topCategories.slice(0, 3).map((entry) => entry.value),
+        typicalSpend: profile.typicalSpend
+      },
+      indexed: store.size,
+      embedding: embeddingStatus(env),
+      recommendations,
+      fromHistory,
+      fromWeb,
+      ...(webError ? { webError } : {}),
+      note: [
+        'History recommendations are products the user already saved and did not keep; say that plainly rather than presenting them as new finds.',
+        fromWeb.length ? 'Web prices here are unconfirmed; call fetch_offer before quoting one.' : '',
+        profile.strength !== 'good' ? 'The taste profile is weak, so hedge the recommendation.' : '',
+        embeddingStatus(env).semantic ? '' : 'The offline encoder matches wording, not meaning, so near-misses are expected.'
+      ].filter(Boolean).join(' ')
     });
   }
 

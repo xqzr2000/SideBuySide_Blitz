@@ -1,5 +1,6 @@
 import { executeTool, normalizeItems, toolDefinitions } from './tools.js';
 import { searchStatus } from './search.js';
+import { embeddingStatus } from './embeddings.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MAX_ROUNDS = 8;
@@ -50,8 +51,9 @@ async function callOpenRouter({ messages, tools }, env = process.env, fetchImpl 
   return data;
 }
 
-export function buildSystemPrompt({ items = [], env = process.env } = {}) {
+export function buildSystemPrompt({ items = [], env = process.env, memory = null } = {}) {
   const search = searchStatus(env);
+  const embeddings = embeddingStatus(env);
   const lines = [
     'You are SideKick, the shopping agent inside the SideBuySide Chrome side panel.',
     'You do three jobs: organize the Side Shelf, compare what is on it, and search the internet for a better deal on it.',
@@ -61,6 +63,12 @@ export function buildSystemPrompt({ items = [], env = process.env } = {}) {
     '- organize_items and tag_items change the real cards in the side panel, so only call them when the user wants the shelf rearranged or labelled.',
     '- find_duplicates spots the same product saved from two stores; rank_items scores a shortlist on weighted criteria.',
     '- search_deals looks for cheaper listings, fetch_offer opens one listing and reads its live price, evaluate_deal does the savings math.',
+    '- search_history, similar_items, taste_profile and recommend_products read the shelf-history vector database: every product ever saved, including cards the user later removed.',
+    '',
+    'Recommending:',
+    '- Ground every recommendation in the history tools. Name the saved products that justify it instead of asserting a preference.',
+    '- Items recommended from history are things the user already saved and did not keep; say so rather than passing them off as new finds.',
+    '- Say when the profile is thin, and never infer sensitive traits about the user from their shopping history.',
     '',
     'Rules:',
     '- Never invent a price, spec, discount, rating, or stock level. If a field is missing, say it is missing.',
@@ -79,19 +87,26 @@ export function buildSystemPrompt({ items = [], env = process.env } = {}) {
       : 'Web search is NOT configured on this backend. If the user asks for better deals, say so plainly and share the setup hint from the tool result instead of guessing at prices.'
   );
 
+  lines.push(embeddings.semantic
+    ? `Shelf memory is embedded with ${embeddings.provider} (${embeddings.model}).`
+    : 'Shelf memory uses the built-in offline encoder, which matches wording rather than meaning: near-synonyms will not match, so do not read too much into a weak similarity score.');
+
   const withoutPrice = items.filter((item) => item.price === null).length;
   lines.push(
     '',
     `Shelf right now: ${items.length} saved item${items.length === 1 ? '' : 's'}${withoutPrice ? `, ${withoutPrice} without a price` : ''}.`
   );
+  if (memory?.records) {
+    lines.push(`Shelf history indexed: ${memory.records} product${memory.records === 1 ? '' : 's'} (${memory.pastItems} no longer on the shelf).`);
+  }
 
   return lines.join('\n');
 }
 
-export async function runSideKick({ history = [], items = [], env = process.env, fetchImpl } = {}) {
+export async function runSideKick({ history = [], items = [], env = process.env, fetchImpl, store = null } = {}) {
   const safeItems = normalizeItems(items);
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ items: safeItems, env }) },
+    { role: 'system', content: buildSystemPrompt({ items: safeItems, env, memory: store?.stats?.() || null }) },
     ...history.slice(-20)
   ];
 
@@ -117,7 +132,7 @@ export async function runSideKick({ history = [], items = [], env = process.env,
       const args = parseToolArgs(call?.function?.arguments);
       let output;
       try {
-        const executed = await executeTool(name, args, safeItems, { env, fetchImpl });
+        const executed = await executeTool(name, args, safeItems, { env, fetchImpl, store });
         output = executed.result;
         actions.push(...executed.actions);
       } catch (error) {
