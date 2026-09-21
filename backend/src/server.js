@@ -1,6 +1,8 @@
 import http from 'node:http';
 import { loadEnvFile } from 'node:process';
 import { runSideKick } from './agent.js';
+import { toolDefinitions } from './tools.js';
+import { searchStatus } from './search.js';
 
 try {
   loadEnvFile(new URL('../.env', import.meta.url));
@@ -65,11 +67,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/health') {
     if (!isAuthorized(req)) return sendJson(res, 401, { error: 'Unauthorized' });
+    const search = searchStatus(process.env);
     return sendJson(res, 200, {
       ok: true,
       service: 'SideBuySide',
       openRouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
-      model: process.env.OPENROUTER_MODEL || 'openai/gpt-5-mini'
+      model: process.env.OPENROUTER_MODEL || 'openai/gpt-5-mini',
+      search,
+      tools: toolDefinitions.map((tool) => tool.function.name)
     });
   }
 

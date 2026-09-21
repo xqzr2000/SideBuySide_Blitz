@@ -21,9 +21,16 @@ form.addEventListener('submit', async (event) => {
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error('Health check failed.');
-    status.textContent = data.openRouterConfigured
+    const lines = [data.openRouterConfigured
       ? `Connected. SideKick model: ${data.model}`
-      : 'Connected, but OPENROUTER_API_KEY is not configured yet.';
+      : 'Connected, but OPENROUTER_API_KEY is not configured yet.'];
+    if (data.search) {
+      lines.push(data.search.configured
+        ? `Web search: on (${data.search.provider}).`
+        : 'Web search: off. Set TAVILY_API_KEY, BRAVE_SEARCH_API_KEY, SERPAPI_API_KEY, or rely on OpenRouter\'s web plugin.');
+    }
+    if (Array.isArray(data.tools)) lines.push(`SideKick tools: ${data.tools.length}.`);
+    status.textContent = lines.join(' ');
   } catch (error) {
     status.textContent = `Saved, but could not connect: ${error.message}`;
   }

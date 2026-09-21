@@ -35,6 +35,9 @@ async function saveProduct(product, tab) {
     ...product,
     id: existing?.id || crypto.randomUUID(),
     tabId: tab.id,
+    // Re-adding a page refreshes its facts but keeps whatever SideKick organized.
+    tags: existing?.tags || [],
+    note: existing?.note || '',
     addedAt: existing?.addedAt || now,
     updatedAt: now
   };

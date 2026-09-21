@@ -45,10 +45,21 @@
 
       <div id="chatMessages" class="chat-messages"></div>
       <div id="chatError" class="status error hidden"></div>
-      <form id="chatForm" class="chat-form">
-        <textarea id="chatInput" rows="2" placeholder="Compare these, find tradeoffs, organize my shelf…" required></textarea>
-        <button id="sendButton" class="send-button" type="submit">Send</button>
-      </form>
+
+      <div class="chat-dock">
+        <div id="suggestions" class="suggestions">
+          <button type="button" data-prompt="Compare everything on my shelf and tell me which is the best buy and why.">Compare all</button>
+          <button type="button" data-prompt="Search the web for better deals on my saved items, verify the prices you find, and tell me which ones actually beat what I saved.">Find deals</button>
+          <button type="button" data-prompt="Organize my shelf by category.">Organize</button>
+          <button type="button" data-prompt="Are any of my saved items the same product from different stores?">Duplicates</button>
+          <button type="button" data-prompt="Rank my shelf on value for money and tag the top two as finalists.">Rank &amp; tag</button>
+          <button type="button" data-prompt="What is everything on my shelf worth in total?">Total</button>
+        </div>
+        <form id="chatForm" class="chat-form">
+          <textarea id="chatInput" rows="2" placeholder="Compare these, hunt for a better price, organize my shelf…" required></textarea>
+          <button id="sendButton" class="send-button" type="submit">Send</button>
+        </form>
+      </div>
     </section>
   </main>
 
