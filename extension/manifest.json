@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "SideBuySide",
+  "version": "0.1.0",
+  "description": "Save products side by side and compare them with SideKick.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "scripting",
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://localhost:8787/*",
+    "http://127.0.0.1:8787/*",
+    "https://*.app.github.dev/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open SideBuySide"
+  },
+  "options_page": "options.html"
+}

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SideBuySide Settings</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; max-width: 680px; margin: 48px auto; padding: 0 20px; color: #1d1f23; }
+    label { font-weight: 700; display: block; margin-bottom: 8px; }
+    input { width: 100%; box-sizing: border-box; padding: 11px 12px; border: 1px solid #cfd3da; border-radius: 9px; font: inherit; }
+    button { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 9px; background: #17181b; color: white; font-weight: 700; cursor: pointer; }
+    .hint { color: #626975; }
+    #status { margin-top: 12px; font-weight: 700; }
+    code { background: #f1f2f4; padding: 2px 5px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>SideBuySide Settings</h1>
+  <p class="hint">The extension talks to your local Node backend. For local VS Code use <code>http://127.0.0.1:8787</code>. In GitHub Codespaces, paste the forwarded HTTPS port URL for port 8787.</p>
+  <form id="form">
+    <label for="apiBaseUrl">Backend URL</label>
+    <input id="apiBaseUrl" type="url" required placeholder="http://127.0.0.1:8787" />
+    <label for="apiToken" style="margin-top:16px">Backend token <span style="font-weight:400">(optional)</span></label>
+    <input id="apiToken" type="password" placeholder="Recommended for a public Codespaces port" />
+    <button type="submit">Save & Test</button>
+  </form>
+  <div id="status"></div>
+  <script src="options.js"></script>
+</body>
+</html>

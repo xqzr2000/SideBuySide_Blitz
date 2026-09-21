@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SideBuySide</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="app">
+    <section id="shelfView" class="view">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">SHOPPING SHELF</div>
+          <h1>SideBuySide</h1>
+        </div>
+        <button id="settingsButton" class="icon-button" title="Settings">⚙</button>
+      </header>
+
+      <div id="status" class="status hidden"></div>
+      <div id="emptyState" class="empty-state hidden">
+        <div class="empty-icon">＋</div>
+        <h2>No items yet</h2>
+        <p>Right-click a product page and choose <strong>Add2SideBuySide</strong>.</p>
+      </div>
+      <div id="cards" class="cards"></div>
+
+      <footer class="bottom-action">
+        <button id="talkButton" class="primary-button">Talk to SideKick</button>
+      </footer>
+    </section>
+
+    <section id="chatView" class="view hidden">
+      <header class="topbar chat-header">
+        <button id="backButton" class="icon-button" aria-label="Back">←</button>
+        <div class="chat-title">
+          <div class="assistant-dot"></div>
+          <div>
+            <div class="eyebrow">SHOPPING AGENT</div>
+            <h1>SideKick</h1>
+          </div>
+        </div>
+        <button id="clearChatButton" class="text-button">Clear</button>
+      </header>
+
+      <div id="chatMessages" class="chat-messages"></div>
+      <div id="chatError" class="status error hidden"></div>
+      <form id="chatForm" class="chat-form">
+        <textarea id="chatInput" rows="2" placeholder="Compare these, find tradeoffs, organize my shelf…" required></textarea>
+        <button id="sendButton" class="send-button" type="submit">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <dialog id="detailsDialog" class="dialog">
+    <div class="dialog-head">
+      <h2>Item details</h2>
+      <button id="closeDetails" class="icon-button">×</button>
+    </div>
+    <div id="detailsBody" class="details-body"></div>
+  </dialog>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
