@@ -6,25 +6,32 @@ Right-click a shopping product page, choose **Add2SideBuySide**, and the extensi
 
 ## Elevator Pitch
 
-Quick question: would you hand your entire Amazon order history to Shopify so they could find you cheaper alternatives?
+Quick question: would you hand your entire Amazon order history to Shopify so they could recommend products to you?
 
-Now what if you could share that history with every online store at once, and get recommendations from all of them, 
+Probably not.
 
-but like, without any of them actually seeing it?
+But what if you could use that shopping history to get recommendations from every online store at once—without any of them ever seeing your personal data?
 
-Sounds too good to be true. Give me the next minute and I'll show you how.
+Sounds impossible. Give me the next minute and I'll show you how.
 
 We call it SideBuySide.
 
-Today, recommendations are a trade. The more a platform knows about you, the better its suggestions, but only inside that one store. You give up your privacy and still end up with a narrow view of the market.
+Today, recommendations come with a trade-off. The more a platform knows about you, the better its suggestions—but only within that platform. You give up privacy and still get a limited view of the market.
 
-SideBuySide flips that. You add the things you want, from any site, to your personal Side Shelf. Your shopping history stays with you.
+SideBuySide changes that.
 
-Then our AI agent, SideKick, goes to work. It compares prices, scouts other vendors for similar or cheaper options, and recommends your next best purchase. Vendors see a request for a product. They never see who you are or what you've bought before.
+You save products from any website to your personal Side Shelf. Your shopping history stays under your control.
 
-The result: better recommendations, cheaper alternatives, and your privacy stays intact.
+Then our AI shopping agent, SideKick, gets to work. It analyzes what you're looking for, searches across vendors, compares prices, finds similar products, and uncovers better deals.
 
-SideBuySide. Shop side by side with the whole market, without giving yourself away.
+Vendors don't see your identity, your purchase history, or your personal profile. They simply receive anonymous product requests and compete to offer the best match.
+
+The result? Better recommendations, more choice, lower prices, and privacy by design.
+
+SideBuySide.
+
+Shop with the whole market, not just one store.
+
 
 ## Who is Sidekick
 
