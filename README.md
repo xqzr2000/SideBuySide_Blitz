@@ -1,6 +1,6 @@
 # SideBuySide
 
-SideBuySide is a Chrome Manifest V3 extension that turns Chrome's side panel into a lightweight product comparison shelf. 
+SideBuySide is a Chrome Manifest V3 extension that turns Chrome's side panel into a unified shopping shelf. 
 
 Right-click a shopping product page, choose **Add2SideBuySide**, and the extension extracts product metadata into a card. 
 
