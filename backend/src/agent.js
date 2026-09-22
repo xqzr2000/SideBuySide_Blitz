@@ -1,8 +1,8 @@
 import { executeTool, normalizeItems, toolDefinitions } from './tools.js';
 import { searchStatus } from './search.js';
 import { embeddingStatus } from './embeddings.js';
+import { openAiBaseUrl, openAiErrorMessage, openAiHeaders, openAiModel } from './openai.js';
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const MAX_ROUNDS = 8;
 
 function parseToolArgs(value) {
@@ -15,35 +15,63 @@ function parseToolArgs(value) {
   }
 }
 
-async function callOpenRouter({ messages, tools }, env = process.env, fetchImpl = globalThis.fetch) {
-  const apiKey = env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    const error = new Error('OPENROUTER_API_KEY is not configured on the backend.');
+/**
+ * Only user and assistant text turns come from the panel. Anything else (a stray
+ * "system" turn, a malformed entry) is dropped rather than forwarded to the model.
+ */
+function sanitizeHistory(history = []) {
+  return history
+    .filter((message) => (message?.role === 'user' || message?.role === 'assistant') && typeof message.content === 'string')
+    .map(({ role, content }) => ({ role, content }))
+    .slice(-20);
+}
+
+/**
+ * Echo an assistant turn back with only the fields the Chat Completions API accepts
+ * as input. Response-only fields such as `annotations` are rejected if sent back.
+ */
+function assistantTurn(message) {
+  const turn = { role: 'assistant', content: message.content ?? null };
+  if (message.tool_calls?.length) {
+    turn.tool_calls = message.tool_calls.map((call) => ({
+      id: call.id,
+      type: call.type || 'function',
+      function: { name: call.function?.name, arguments: call.function?.arguments ?? '{}' }
+    }));
+  }
+  return turn;
+}
+
+async function callOpenAI({ messages, tools }, env = process.env, fetchImpl = globalThis.fetch) {
+  if (!env.OPENAI_API_KEY) {
+    const error = new Error('OPENAI_API_KEY is not configured on the backend.');
     error.statusCode = 503;
     throw error;
   }
 
-  const model = env.OPENROUTER_MODEL || 'openai/gpt-5-mini';
-  const response = await fetchImpl(OPENROUTER_URL, {
+  const body = {
+    model: openAiModel(env),
+    messages,
+    tools,
+    tool_choice: 'auto'
+  };
+  // GPT-5 and o-series models reject any temperature but the default, so it is
+  // only sent when explicitly configured for a model that accepts it.
+  const temperature = Number(env.OPENAI_TEMPERATURE);
+  if (env.OPENAI_TEMPERATURE !== undefined && env.OPENAI_TEMPERATURE !== '' && Number.isFinite(temperature)) {
+    body.temperature = temperature;
+  }
+  if (env.OPENAI_REASONING_EFFORT) body.reasoning_effort = env.OPENAI_REASONING_EFFORT;
+
+  const response = await fetchImpl(`${openAiBaseUrl(env)}/chat/completions`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': env.OPENROUTER_SITE_URL || 'http://localhost:8787',
-      'X-Title': env.OPENROUTER_APP_NAME || 'SideBuySide SideKick'
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      tools,
-      tool_choice: 'auto',
-      temperature: 0.3
-    })
+    headers: openAiHeaders(env),
+    body: JSON.stringify(body)
   });
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data?.error?.message || `OpenRouter request failed (${response.status}).`);
+    const error = new Error(openAiErrorMessage(data, response.status));
     error.statusCode = response.status;
     throw error;
   }
@@ -107,7 +135,7 @@ export async function runSideKick({ history = [], items = [], env = process.env,
   const safeItems = normalizeItems(items);
   const messages = [
     { role: 'system', content: buildSystemPrompt({ items: safeItems, env, memory: store?.stats?.() || null }) },
-    ...history.slice(-20)
+    ...sanitizeHistory(history)
   ];
 
   let lastText = '';
@@ -115,11 +143,11 @@ export async function runSideKick({ history = [], items = [], env = process.env,
   const actions = [];
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const result = await callOpenRouter({ messages, tools: toolDefinitions }, env, fetchImpl || globalThis.fetch);
+    const result = await callOpenAI({ messages, tools: toolDefinitions }, env, fetchImpl || globalThis.fetch);
     const assistant = result?.choices?.[0]?.message;
-    if (!assistant) throw new Error('OpenRouter returned no assistant message.');
+    if (!assistant) throw new Error('OpenAI returned no assistant message.');
 
-    messages.push(assistant);
+    messages.push(assistantTurn(assistant));
     if (assistant.content) lastText = assistant.content;
 
     const calls = assistant.tool_calls || [];

@@ -1,4 +1,5 @@
 import { parsePriceFromText } from './currency.js';
+import { normalizeModel, openAiBaseUrl, openAiErrorMessage, openAiHeaders } from './openai.js';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const cache = new Map();
@@ -7,7 +8,7 @@ export const PROVIDER_SETUP = {
   tavily: 'Set TAVILY_API_KEY (https://tavily.com).',
   brave: 'Set BRAVE_SEARCH_API_KEY (https://brave.com/search/api).',
   serpapi: 'Set SERPAPI_API_KEY (https://serpapi.com).',
-  openrouter: 'Set OPENROUTER_API_KEY; SideKick then uses OpenRouter\'s built-in web plugin.'
+  openai: 'Set OPENAI_API_KEY; SideKick then uses OpenAI\'s built-in web_search tool.'
 };
 
 /** Pick a provider: an explicit SEARCH_PROVIDER wins, otherwise the first configured key. */
@@ -17,7 +18,7 @@ export function resolveProvider(env = process.env) {
   if (env.TAVILY_API_KEY) return 'tavily';
   if (env.BRAVE_SEARCH_API_KEY) return 'brave';
   if (env.SERPAPI_API_KEY) return 'serpapi';
-  if (env.OPENROUTER_API_KEY) return 'openrouter';
+  if (env.OPENAI_API_KEY) return 'openai';
   return 'none';
 }
 
@@ -103,40 +104,65 @@ async function serpapiSearch(query, maxResults, env, fetchImpl) {
   }));
 }
 
-/** OpenRouter's web plugin returns citations as message annotations. */
-async function openRouterSearch(query, maxResults, env, fetchImpl) {
-  const response = await fetchImpl('https://openrouter.ai/api/v1/chat/completions', {
+/** The line of the answer a citation sits in: that is where the store and price are. */
+function lineAround(text, index) {
+  const at = Math.max(0, Math.min(Number(index) || 0, text.length));
+  const start = text.lastIndexOf('\n', at - 1) + 1;
+  const stop = text.indexOf('\n', at);
+  return text.slice(start, stop === -1 ? text.length : stop).trim();
+}
+
+/**
+ * OpenAI's Responses API with the hosted web_search tool. Sources come back as
+ * url_citation annotations on the output text; each one becomes a result, with the
+ * cited line of the answer as its snippet.
+ */
+async function openAiSearch(query, maxResults, env, fetchImpl) {
+  const tool = { type: env.OPENAI_WEB_SEARCH_TOOL || 'web_search' };
+  if (env.OPENAI_SEARCH_COUNTRY) {
+    // Prices and stock differ by market, so search from the shopper's country.
+    tool.user_location = { type: 'approximate', country: String(env.OPENAI_SEARCH_COUNTRY).toUpperCase() };
+  }
+
+  const response = await fetchImpl(`${openAiBaseUrl(env)}/responses`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': env.OPENROUTER_SITE_URL || 'http://localhost:8787',
-      'X-Title': env.OPENROUTER_APP_NAME || 'SideBuySide SideKick'
-    },
+    headers: openAiHeaders(env),
     body: JSON.stringify({
-      model: env.OPENROUTER_SEARCH_MODEL || env.OPENROUTER_MODEL || 'openai/gpt-5-mini',
-      plugins: [{ id: 'web', max_results: maxResults }],
-      messages: [{
-        role: 'user',
-        content: `Find current retail listings and prices for: ${query}. List the store, the product, and the price.`
-      }]
+      model: normalizeModel(env.OPENAI_SEARCH_MODEL || env.OPENAI_MODEL),
+      tools: [tool],
+      input: `Search the web for current retail listings of: ${query}. Give one line per listing with the store, the exact product, and its price, and cite each listing's page.`
     })
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error?.message || `OpenRouter web search failed (${response.status}).`);
+  if (!response.ok) throw new Error(openAiErrorMessage(data, response.status, 'OpenAI web search'));
 
-  const message = data?.choices?.[0]?.message || {};
-  const annotations = (message.annotations || [])
-    .filter((entry) => entry?.type === 'url_citation' && entry.url_citation?.url)
-    .map((entry) => normalizeResult({
-      title: entry.url_citation.title,
-      url: entry.url_citation.url,
-      snippet: entry.url_citation.content || ''
-    }));
+  const texts = (data.output || [])
+    .filter((item) => item?.type === 'message')
+    .flatMap((item) => item.content || [])
+    .filter((part) => part?.type === 'output_text');
+
+  const seen = new Set();
+  const results = [];
+  for (const part of texts) {
+    const text = String(part.text || '');
+    for (const annotation of part.annotations || []) {
+      if (annotation?.type !== 'url_citation') continue;
+      // Responses puts url/title on the annotation; tolerate the nested chat shape too.
+      const citation = annotation.url_citation || annotation;
+      const url = String(citation.url || '').replace(/[?&]utm_source=openai$/, '');
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      results.push(normalizeResult({
+        title: citation.title,
+        url,
+        snippet: lineAround(text, annotation.start_index)
+      }));
+    }
+  }
 
   return {
-    results: annotations.slice(0, maxResults),
-    summary: String(message.content || '').slice(0, 1200)
+    results: results.slice(0, maxResults),
+    summary: texts.map((part) => part.text).join('\n').slice(0, 1200)
   };
 }
 
@@ -178,7 +204,7 @@ export async function searchWeb(options = {}, deps = {}) {
     if (provider === 'tavily') payload = { results: await tavilySearch(query, maxResults, env, fetchImpl) };
     else if (provider === 'brave') payload = { results: await braveSearch(query, maxResults, env, fetchImpl) };
     else if (provider === 'serpapi') payload = { results: await serpapiSearch(query, maxResults, env, fetchImpl) };
-    else if (provider === 'openrouter') payload = await openRouterSearch(query, maxResults, env, fetchImpl);
+    else if (provider === 'openai') payload = await openAiSearch(query, maxResults, env, fetchImpl);
     else {
       return { provider, query, results: [], configured: false, error: `Unknown SEARCH_PROVIDER "${provider}".` };
     }

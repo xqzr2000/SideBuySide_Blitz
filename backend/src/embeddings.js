@@ -1,4 +1,5 @@
 import { tokenize } from './items.js';
+import { openAiBaseUrl, openAiHeaders } from './openai.js';
 
 export const LOCAL_DIMENSIONS = 256;
 const MAX_INPUT_CHARS = 2000;
@@ -7,7 +8,7 @@ const cache = new Map();
 const CACHE_LIMIT = 2000;
 
 export const EMBEDDING_SETUP = {
-  openai: 'Set OPENAI_API_KEY for text-embedding-3-small.',
+  openai: 'Set OPENAI_API_KEY for text-embedding-3-small (the same key SideKick chats with).',
   voyage: 'Set VOYAGE_API_KEY for voyage-3-lite.',
   jina: 'Set JINA_API_KEY for jina-embeddings-v3.',
   cohere: 'Set COHERE_API_KEY for embed-english-v3.0.'
@@ -92,10 +93,10 @@ export function localEmbed(text) {
   return l2Normalize(vector);
 }
 
-async function openAiShaped(texts, { url, apiKey, model, extra = {}, fetchImpl }) {
+async function openAiShaped(texts, { url, apiKey, headers, model, extra = {}, fetchImpl }) {
   const response = await fetchImpl(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers: headers || { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ model, input: texts, ...extra })
   });
   const data = await response.json().catch(() => ({}));
@@ -121,7 +122,7 @@ async function cohereEmbed(texts, { apiKey, model, fetchImpl }) {
 async function embedBatch(provider, texts, env, fetchImpl) {
   const model = embeddingModel(provider, env);
   if (provider === 'openai') {
-    return openAiShaped(texts, { url: 'https://api.openai.com/v1/embeddings', apiKey: env.OPENAI_API_KEY, model, fetchImpl });
+    return openAiShaped(texts, { url: `${openAiBaseUrl(env)}/embeddings`, headers: openAiHeaders(env), model, fetchImpl });
   }
   if (provider === 'voyage') {
     return openAiShaped(texts, { url: 'https://api.voyageai.com/v1/embeddings', apiKey: env.VOYAGE_API_KEY, model, fetchImpl });

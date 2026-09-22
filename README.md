@@ -10,7 +10,7 @@ Sidekick is SideBuySide’s AI agent. It helps you organize your Side Shelf, com
 
 ## What SideKick can do
 
-SideKick runs as a tool-calling agent on the Node backend. It never answers from memory about your shelf — it calls a tool, and anything a tool could not establish is reported as missing rather than guessed.
+SideKick runs as a tool-calling agent on the Node backend, powered by the OpenAI API. It never answers from memory about your shelf — it calls a tool, and anything a tool could not establish is reported as missing rather than guessed.
 
 ### Organize the shelf
 
@@ -60,7 +60,7 @@ Removing a card takes it off the shelf but keeps it in memory — that is what m
 
 #### Embeddings
 
-Embeddings are pluggable, and the default needs no account: a built-in offline encoder that hashes tokens and character n-grams. It matches wording rather than meaning, and SideKick is told to say so. Set one key below for real semantic search — the index notices the change and re-embeds itself on the next sync.
+The `OPENAI_API_KEY` that SideKick chats with also embeds the shelf with `text-embedding-3-small`, so semantic memory is on by default. Other providers are pluggable, and `EMBEDDING_PROVIDER=local` switches to a built-in offline encoder (hashed tokens and character n-grams) that sends nothing to an API. That encoder matches wording rather than meaning, and SideKick is told so when it is in use. Switching providers is safe: the index notices the change and re-embeds itself on the next sync.
 
 | Provider | Key | Model |
 | --- | --- | --- |
@@ -74,7 +74,7 @@ If a hosted provider errors, embedding falls back to the offline encoder rather 
 ## Setup
 
 ```bash
-cp backend/.env.example backend/.env   # add your OPENROUTER_API_KEY
+cp backend/.env.example backend/.env   # add your OPENAI_API_KEY
 npm start                              # backend on http://127.0.0.1:8787
 npm test                               # backend test suite
 ```
@@ -91,18 +91,31 @@ Then load `extension/` as an unpacked extension (`chrome://extensions` → Devel
 | `GET /api/history/stats` | Index stats and the readable taste profile. |
 | `DELETE /api/history` | Forget the indexed history. |
 
+### OpenAI configuration
+
+One `OPENAI_API_KEY` covers chat, web search, and shelf memory. SideKick calls the Chat Completions API with function tools and defaults to `gpt-5-mini`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | — | Required. |
+| `OPENAI_MODEL` | `gpt-5-mini` | Any Chat Completions model with tool calling. A carried-over `openai/…` prefix is stripped. |
+| `OPENAI_REASONING_EFFORT` | model default | `minimal`, `low`, `medium`, or `high`, for reasoning models. |
+| `OPENAI_TEMPERATURE` | unset | Only sent when set. GPT-5 and o-series models reject any value but the default, so leave it unset for them. |
+| `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | unset | Sent as `OpenAI-Organization` / `OpenAI-Project` headers. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Point at Azure OpenAI or another OpenAI-compatible gateway. |
+
 ### Web search configuration
 
-Web search is optional and pluggable. Set one of these and SideKick picks it up automatically (`SEARCH_PROVIDER` forces a specific one):
+With just the OpenAI key, SideKick searches through the Responses API's hosted `web_search` tool and turns its cited sources into offers. Set `OPENAI_SEARCH_COUNTRY` (e.g. `CA`) so prices come from your market. A dedicated search API takes priority when configured (`SEARCH_PROVIDER` forces a specific one):
 
 | Provider | Key | Notes |
 | --- | --- | --- |
 | Tavily | `TAVILY_API_KEY` | Preferred when present. |
 | Brave Search | `BRAVE_SEARCH_API_KEY` | |
 | SerpApi | `SERPAPI_API_KEY` | Uses the Google Shopping engine, so prices come straight from the provider. |
-| OpenRouter | `OPENROUTER_API_KEY` | Fallback; uses OpenRouter's built-in web plugin, no extra account needed. |
+| OpenAI | `OPENAI_API_KEY` | Default; hosted `web_search` tool, no extra account needed. |
 
-With none of them set, deal hunting is disabled and SideKick says so instead of inventing prices. **Settings → Save & Test** reports which provider is live.
+With `SEARCH_PROVIDER=none`, deal hunting is off and SideKick says so instead of inventing prices. **Settings → Save & Test** reports which provider is live.
 
 ## UI Demo
 

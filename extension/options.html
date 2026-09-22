@@ -5,13 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SideBuySide Settings</title>
   <style>
-    body { font: 14px/1.5 system-ui, sans-serif; max-width: 680px; margin: 48px auto; padding: 0 20px; color: #1d1f23; }
+    :root { color-scheme: light; }
+    body { font: 14px/1.5 Inter, system-ui, sans-serif; max-width: 680px; margin: 0 auto; padding: 48px 20px; color: #1f2a3d; background: #f6f8fc; }
+    h1, h2 { letter-spacing: -0.02em; }
     label { font-weight: 700; display: block; margin-bottom: 8px; }
-    input { width: 100%; box-sizing: border-box; padding: 11px 12px; border: 1px solid #cfd3da; border-radius: 9px; font: inherit; }
-    button { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 9px; background: #17181b; color: white; font-weight: 700; cursor: pointer; }
-    .hint { color: #626975; }
+    input { width: 100%; box-sizing: border-box; padding: 11px 12px; border: 1px solid #e3e8f1; border-radius: 9px; font: inherit; color: inherit; background: #ffffff; outline: none; }
+    input:focus { border-color: #2f62e0; box-shadow: 0 0 0 3px #e9f0ff; }
+    button { margin-top: 12px; padding: 10px 14px; border: 0; border-radius: 9px; background: #2f62e0; color: #ffffff; font-weight: 700; cursor: pointer; box-shadow: 0 4px 14px rgba(47, 98, 224, .22); }
+    button:hover { background: #2653c4; }
+    button:disabled { opacity: .6; cursor: default; }
+    button.danger { background: #ffffff; color: #c2362b; border: 1px solid #f3c5c0; box-shadow: none; }
+    button.danger:hover { background: #fdecea; }
+    .hint { color: #5f6b7d; }
     #status { margin-top: 12px; font-weight: 700; }
-    code { background: #f1f2f4; padding: 2px 5px; border-radius: 5px; }
+    code { background: #eef2f8; padding: 2px 5px; border-radius: 5px; }
   </style>
 </head>
 <body>
@@ -29,7 +36,7 @@
   <h2 style="margin-top:36px">SideKick memory</h2>
   <p class="hint">Every product you save is indexed in a vector database on your own backend, including cards you later removed. SideKick uses it to compare against what you have shopped for before and to recommend what to look at next.</p>
   <div id="memory" class="hint">Checking…</div>
-  <button id="forgetButton" type="button" style="background:#b42318">Forget shelf history</button>
+  <button id="forgetButton" class="danger" type="button">Forget shelf history</button>
 
   <script src="options.js"></script>
 </body>

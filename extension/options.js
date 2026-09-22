@@ -24,9 +24,9 @@ async function refreshMemory() {
     const brands = (data.profile?.topBrands || []).slice(0, 3).map((entry) => entry.value).join(', ');
     memory.textContent = [
       `${stats.records || 0} products indexed (${stats.onShelf || 0} on the shelf, ${stats.pastItems || 0} past).`,
-      `Embeddings: ${data.embeddings?.provider} (${data.embeddings?.semantic ? 'semantic' : 'offline, matches wording only'}).`,
+      data.embeddings ? `Embeddings: ${data.embeddings.provider} (${data.embeddings.semantic ? 'semantic' : 'offline, matches wording only'}).` : '',
       brands ? `Top brands: ${brands}.` : 'Not enough history for a taste profile yet.'
-    ].join(' ');
+    ].filter(Boolean).join(' ');
   } catch (error) {
     memory.textContent = `Could not read the memory index: ${error.message}`;
   }
@@ -68,13 +68,13 @@ form.addEventListener('submit', async (event) => {
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error('Health check failed.');
-    const lines = [data.openRouterConfigured
-      ? `Connected. SideKick model: ${data.model}`
-      : 'Connected, but OPENROUTER_API_KEY is not configured yet.'];
+    const lines = [data.openaiConfigured
+      ? `Connected. SideKick model: ${data.model} (OpenAI).`
+      : 'Connected, but OPENAI_API_KEY is not configured yet.'];
     if (data.search) {
       lines.push(data.search.configured
         ? `Web search: on (${data.search.provider}).`
-        : 'Web search: off. Set TAVILY_API_KEY, BRAVE_SEARCH_API_KEY, SERPAPI_API_KEY, or rely on OpenRouter\'s web plugin.');
+        : 'Web search: off. Set OPENAI_API_KEY to use OpenAI web search, or TAVILY_API_KEY, BRAVE_SEARCH_API_KEY, or SERPAPI_API_KEY.');
     }
     if (data.embeddings) {
       lines.push(`Shelf memory: ${data.embeddings.provider}${data.embeddings.semantic ? '' : ' (offline encoder)'}.`);

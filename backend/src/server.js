@@ -6,6 +6,7 @@ import { searchStatus } from './search.js';
 import { embeddingStatus } from './embeddings.js';
 import { getDefaultStore } from './vectorstore.js';
 import { buildTasteProfile, syncShelfHistory } from './history.js';
+import { openAiModel } from './openai.js';
 
 try {
   loadEnvFile(new URL('../.env', import.meta.url));
@@ -74,8 +75,9 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       service: 'SideBuySide',
-      openRouterConfigured: Boolean(process.env.OPENROUTER_API_KEY),
-      model: process.env.OPENROUTER_MODEL || 'openai/gpt-5-mini',
+      provider: 'openai',
+      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      model: openAiModel(process.env),
       search,
       embeddings: embeddingStatus(process.env),
       memory: (await getDefaultStore(process.env)).stats(),
