@@ -48,6 +48,7 @@ Your data works for you, not for one store.
 
 SideBuySide. Shop the whole market, not just one store.
 
+<img width="1672" height="940" alt="2" src="https://github.com/user-attachments/assets/ec5dfbfb-5d5e-4495-be42-008233ec6005" />
 
 ## Who is Sidekick
 
