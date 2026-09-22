@@ -44,4 +44,4 @@ Throughout this journey, SideKick can continuously learn each user’s preferenc
 
 By starting with college freshmen, SideBuySide can serve consumers at the moment they begin forming independent shopping habits. The campus provides a concentrated, social, and repeatable environment for early growth, while each incoming class creates a new opportunity to expand. SideBuySide will begin with students, support them through college, and grow alongside them for years to come.
 
-> From Brainstroming
+> From Brainstroming Session with Wael
