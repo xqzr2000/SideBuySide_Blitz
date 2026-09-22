@@ -53,7 +53,7 @@ SideBuySide. Shop the whole market, not just one store.
 
 Sidekick is SideBuySide’s AI agent. It helps you organize your Side Shelf, compare items within the same category, and scout the internet for better deals.
 
-## Q: How does SideBuySide keep my data private and still give me tailored recommendations?**
+## Q: How does SideBuySide keep my data private and still give me tailored recommendations?
 
 Most shopping platforms personalize by collecting your history on their servers. SideBuySide takes a different approach, inspired by Retrieval-Augmented Generation (RAG).
 
