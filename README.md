@@ -66,6 +66,5 @@ When you ask SideKick to find a better deal, it **retrieves only what's relevant
 
 See **SideBuySide** in action
 
-https://github.com/user-attachments/assets/9267cede-1671-467f-a9d3-1cd4e57a8af1
-
+https://github.com/user-attachments/assets/12322280-6c7c-499e-a20c-ecf59c61abe9
 
