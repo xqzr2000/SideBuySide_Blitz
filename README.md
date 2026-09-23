@@ -6,49 +6,10 @@ Right-click a shopping product page, choose **Add2SideBuySide**, and the extensi
 
 ## Elevator Pitch
 
-Quick question: would you hand your entire Amazon order history to Shopify just so they could recommend products to you?
+Check out our pitch video here:
 
-Probably not. 
+https://github.com/user-attachments/assets/051c5c0b-b16d-45f8-a57d-1da5d017e5b5
 
-But what if you could use that same shopping history to get recommendations from the entire online market 
-
-without handing your personal profile to every store? 
-
-Give me the next minute and I'll show you how. 
-
-We call it SideBuySide. 
-
-Today, online recommendations live inside walled gardens. 
-
-The more a platform knows about you, the better it gets, but only inside its own walls. 
-
-SideBuySide breaks down those walls. 
-
-You save products from anywhere on the web to your personal Side Shelf, while keeping that history under your control. 
-
-Then SideKick, our AI shopping agent, goes to work. 
-
-It understands what you're looking for, scans across vendors, compares prices, and surfaces better matches. 
-
-Vendors don't get your identity or your full shopping profile. 
-
-They get a product request and compete for your business. 
-
-And we're starting with a very specific market: college freshmen. 
-
-They're becoming independent consumers for the first time, buying similar everyday essentials, living in similar campus environments. 
-
-That gives us a focused, repeatable go-to-market. 
-
-One campus, then another, and every year a new freshman class. 
-
-From there, SideBuySide grows with them. 
-
-Your data works for you, not for one store. 
-
-SideBuySide. Shop the whole market, not just one store.
-
-<img width="1672" height="940" alt="2" src="https://github.com/user-attachments/assets/ec5dfbfb-5d5e-4495-be42-008233ec6005" />
 
 ## Who is Sidekick
 
