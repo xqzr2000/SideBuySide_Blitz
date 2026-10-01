@@ -1,7 +1,8 @@
 import { executeTool, normalizeItems, toolDefinitions } from './tools.js';
 import { searchStatus } from './search.js';
 import { embeddingStatus } from './embeddings.js';
-import { openAiBaseUrl, openAiErrorMessage, openAiHeaders, openAiModel } from './openai.js';
+import { addUsage, emptyUsage, estimateTokens, openAiBaseUrl, openAiErrorMessage, openAiHeaders, openAiModel } from './openai.js';
+import { localAnswer } from './local-answers.js';
 
 const MAX_ROUNDS = 8;
 
@@ -49,12 +50,13 @@ async function callOpenAI({ messages, tools }, env = process.env, fetchImpl = gl
     throw error;
   }
 
-  const body = {
-    model: openAiModel(env),
-    messages,
-    tools,
-    tool_choice: 'auto'
-  };
+  const body = { model: openAiModel(env), messages };
+  // Tool definitions cost thousands of prompt tokens, so they are only attached
+  // when the turn might need them.
+  if (tools?.length) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
   // GPT-5 and o-series models reject any temperature but the default, so it is
   // only sent when explicitly configured for a model that accepts it.
   const temperature = Number(env.OPENAI_TEMPERATURE);
@@ -131,19 +133,88 @@ export function buildSystemPrompt({ items = [], env = process.env, memory = null
   return lines.join('\n');
 }
 
+/** A trimmed prompt for turns that run without tools, so small talk stays cheap. */
+export function buildChatOnlyPrompt({ items = [] } = {}) {
+  return [
+    'You are SideKick, the shopping agent inside the SideBuySide Chrome side panel.',
+    'You organize the Side Shelf, compare what is on it, and search the internet for better deals on it.',
+    'No tools are attached to this turn, so you cannot see shelf details, prices, or the web right now.',
+    'Never invent a price, spec, or deal. If answering needs the shelf or a web search, say what you would check and ask the user to request it (for example "compare my shelf" or "find deals").',
+    'Be concise.',
+    `Shelf right now: ${items.length} saved item${items.length === 1 ? '' : 's'}.`
+  ].join('\n');
+}
+
+// Words that point at the shelf, its history, prices, or the web: any of these and
+// the turn gets the full toolset.
+const TOOL_INTENT = new RegExp([
+  'shelf', 'items?', 'products?', 'sav(e|ed|ing)', 'compar', '\\bvs\\.?\\b', 'versus', 'cheap', 'pric', 'cost', 'deals?',
+  'discount', 'sale', 'offers?', 'coupon', 'buy', 'purchas', 'worth', 'total', 'spend', 'budget', 'afford',
+  'organi[sz]e', 'sort', 'group', 'categor', 'tag', 'label', 'rank', 'best', 'better', 'worse', 'top', 'finalist',
+  'duplicate', 'same', 'recommend', 'suggest', 'history', 'taste', 'prefer', 'search', 'find', 'look ?up', 'check',
+  'https?:', 'www\\.', '\\.com', 'store', 'shop', 'seller', 'brand', 'rating', 'review', 'stock', 'ship',
+  'cart', 'order', 'warranty', 'spec', '[$€£¥]', '\\d'
+].join('|'), 'i');
+
+// Follow-ups that point back at earlier results ("which one?", "and the second?").
+const FOLLOW_UP = /\b(it|its|this|that|these|those|them|they|one|ones|first|second|third|last|which|other|another|cheaper|more|again)\b/i;
+
+/** Decide whether this turn might call a tool before paying to send their definitions. */
+export function needsTools(history = []) {
+  const turns = sanitizeHistory(history);
+  const last = [...turns].reverse().find((turn) => turn.role === 'user')?.content || '';
+  if (TOOL_INTENT.test(last)) return true;
+  const hasEarlierTurns = turns.length > 1;
+  return hasEarlierTurns && FOLLOW_UP.test(last);
+}
+
+/** Wrap fetch so every OpenAI response, including the tools' web searches, is tallied. */
+function meteredFetch(fetchImpl, env, usage) {
+  const base = openAiBaseUrl(env);
+  return async (url, options) => {
+    const response = await fetchImpl(url, options);
+    if (String(url).startsWith(base) && response?.ok && typeof response.clone === 'function') {
+      try {
+        addUsage(usage, (await response.clone().json())?.usage);
+      } catch {
+        // A body that is not JSON simply has no usage to count.
+      }
+    }
+    return response;
+  };
+}
+
 export async function runSideKick({ history = [], items = [], env = process.env, fetchImpl, store = null } = {}) {
   const safeItems = normalizeItems(items);
+  const model = openAiModel(env);
+  const turns = sanitizeHistory(history);
+  const lastUser = [...turns].reverse().find((turn) => turn.role === 'user')?.content || '';
+
+  const canned = localAnswer(lastUser, { items: safeItems, env });
+  if (canned) {
+    return { message: canned.message, orchestration: [], actions: [], usage: emptyUsage(), model, local: true, toolsOffered: false };
+  }
+
+  const useTools = needsTools(turns);
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ items: safeItems, env, memory: store?.stats?.() || null }) },
-    ...sanitizeHistory(history)
+    {
+      role: 'system',
+      content: useTools
+        ? buildSystemPrompt({ items: safeItems, env, memory: store?.stats?.() || null })
+        : buildChatOnlyPrompt({ items: safeItems })
+    },
+    ...turns
   ];
 
   let lastText = '';
   const orchestration = [];
   const actions = [];
+  const usage = emptyUsage();
+  const fetchMetered = meteredFetch(fetchImpl || globalThis.fetch, env, usage);
+  const meta = () => ({ usage, model, local: false, toolsOffered: useTools });
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const result = await callOpenAI({ messages, tools: toolDefinitions }, env, fetchImpl || globalThis.fetch);
+    const result = await callOpenAI({ messages, tools: useTools ? toolDefinitions : null }, env, fetchMetered);
     const assistant = result?.choices?.[0]?.message;
     if (!assistant) throw new Error('OpenAI returned no assistant message.');
 
@@ -152,7 +223,7 @@ export async function runSideKick({ history = [], items = [], env = process.env,
 
     const calls = assistant.tool_calls || [];
     if (!calls.length) {
-      return { message: assistant.content || lastText || 'I could not produce a response.', orchestration, actions };
+      return { message: assistant.content || lastText || 'I could not produce a response.', orchestration, actions, ...meta() };
     }
 
     for (const call of calls) {
@@ -160,7 +231,7 @@ export async function runSideKick({ history = [], items = [], env = process.env,
       const args = parseToolArgs(call?.function?.arguments);
       let output;
       try {
-        const executed = await executeTool(name, args, safeItems, { env, fetchImpl, store });
+        const executed = await executeTool(name, args, safeItems, { env, fetchImpl: fetchMetered, store });
         output = executed.result;
         actions.push(...executed.actions);
       } catch (error) {
@@ -179,6 +250,17 @@ export async function runSideKick({ history = [], items = [], env = process.env,
   return {
     message: lastText || 'I reached the tool-orchestration limit. Try asking a narrower comparison question.',
     orchestration,
-    actions
+    actions,
+    ...meta()
+  };
+}
+
+/** Token overhead the panel adds to its own estimate: system prompt plus tool definitions. */
+export function promptOverhead({ items = [], env = process.env, memory = null } = {}) {
+  const safeItems = normalizeItems(items);
+  return {
+    systemTokens: estimateTokens(buildSystemPrompt({ items: safeItems, env, memory })),
+    chatOnlySystemTokens: estimateTokens(buildChatOnlyPrompt({ items: safeItems })),
+    toolTokens: estimateTokens(toolDefinitions)
   };
 }

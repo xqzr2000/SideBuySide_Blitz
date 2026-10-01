@@ -57,6 +57,11 @@
           <button type="button" data-prompt="Rank my shelf on value for money and tag the top two as finalists.">Rank &amp; tag</button>
           <button type="button" data-prompt="What is everything on my shelf worth in total?">Total</button>
         </div>
+        <div id="tokenMeter" class="token-meter" aria-live="polite">
+          <span class="token-stat" title="Estimated tokens the next message will use, including SideKick's instructions and tools"><span class="token-label">Next</span> <strong id="tokenNext">–</strong></span>
+          <span class="token-stat" title="Tokens used by this conversation since it was last cleared"><span class="token-label">This chat</span> <strong id="tokenDialogue">0</strong></span>
+          <span class="token-stat" title="Tokens used across every conversation"><span class="token-label">Total</span> <strong id="tokenTotal">0</strong></span>
+        </div>
         <form id="chatForm" class="chat-form">
           <textarea id="chatInput" rows="2" placeholder="Compare these, hunt for a better price, organize my shelf…" required></textarea>
           <button id="sendButton" class="send-button" type="submit">Send</button>

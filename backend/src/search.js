@@ -128,7 +128,7 @@ async function openAiSearch(query, maxResults, env, fetchImpl) {
     method: 'POST',
     headers: openAiHeaders(env),
     body: JSON.stringify({
-      model: normalizeModel(env.OPENAI_SEARCH_MODEL || env.OPENAI_MODEL),
+      model: normalizeModel(env.OPENAI_SEARCH_MODEL || env.OPENAI_MODEL, undefined, env),
       tools: [tool],
       input: `Search the web for current retail listings of: ${query}. Give one line per listing with the store, the exact product, and its price, and cite each listing's page.`
     })

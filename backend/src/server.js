@@ -1,6 +1,7 @@
 import http from 'node:http';
-import { loadEnvFile } from 'node:process';
-import { runSideKick } from './agent.js';
+import { readFileSync, statSync } from 'node:fs';
+import { parseEnv } from 'node:util';
+import { promptOverhead, runSideKick } from './agent.js';
 import { toolDefinitions } from './tools.js';
 import { searchStatus } from './search.js';
 import { embeddingStatus } from './embeddings.js';
@@ -8,11 +9,48 @@ import { getDefaultStore } from './vectorstore.js';
 import { buildTasteProfile, syncShelfHistory } from './history.js';
 import { openAiModel } from './openai.js';
 
-try {
-  loadEnvFile(new URL('../.env', import.meta.url));
-} catch {
-  // .env is optional; environment variables can also be injected by the shell/Codespaces.
+const envFile = new URL('../.env', import.meta.url);
+// Variables the shell or Codespaces injected always win over .env.
+const shellKeys = new Set(Object.keys(process.env));
+const fileKeys = new Set();
+let envFileStamp = null;
+
+/**
+ * Load backend/.env, and load it again whenever it changes, so switching
+ * OPENAI_MODEL (or any other setting) takes effect on the next request without
+ * restarting the server.
+ */
+function refreshEnv() {
+  let stamp;
+  try {
+    stamp = statSync(envFile).mtimeMs;
+  } catch {
+    stamp = null; // .env is optional; environment variables can also come from the shell.
+  }
+  if (stamp === envFileStamp) return;
+  envFileStamp = stamp;
+
+  let parsed = {};
+  if (stamp !== null) {
+    try {
+      parsed = parseEnv(readFileSync(envFile, 'utf8'));
+    } catch (error) {
+      console.warn('Could not read backend/.env:', error.message);
+      return;
+    }
+  }
+  for (const key of fileKeys) {
+    if (!(key in parsed)) delete process.env[key];
+  }
+  fileKeys.clear();
+  for (const [key, value] of Object.entries(parsed)) {
+    if (shellKeys.has(key)) continue;
+    process.env[key] = value;
+    fileKeys.add(key);
+  }
 }
+
+refreshEnv();
 
 const port = Number(process.env.PORT || 8787);
 
@@ -67,11 +105,13 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  refreshEnv();
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   if (req.method === 'GET' && url.pathname === '/health') {
     if (!isAuthorized(req)) return sendJson(res, 401, { error: 'Unauthorized' });
     const search = searchStatus(process.env);
+    const memory = (await getDefaultStore(process.env)).stats();
     return sendJson(res, 200, {
       ok: true,
       service: 'SideBuySide',
@@ -80,7 +120,8 @@ const server = http.createServer(async (req, res) => {
       model: openAiModel(process.env),
       search,
       embeddings: embeddingStatus(process.env),
-      memory: (await getDefaultStore(process.env)).stats(),
+      memory,
+      promptOverhead: promptOverhead({ env: process.env, memory }),
       tools: toolDefinitions.map((tool) => tool.function.name)
     });
   }
@@ -103,7 +144,7 @@ const server = http.createServer(async (req, res) => {
         console.warn('Shelf history sync failed:', error.message);
       }
 
-      const result = await runSideKick({ history, items, store });
+      const result = await runSideKick({ history, items, store, env: process.env });
       return sendJson(res, 200, { ...result, memory });
     } catch (error) {
       console.error(error);
@@ -153,5 +194,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`SideBuySide backend listening on http://0.0.0.0:${port}`);
+  console.log(`SideBuySide backend listening on http://0.0.0.0:${port} (model: ${openAiModel(process.env)})`);
 });

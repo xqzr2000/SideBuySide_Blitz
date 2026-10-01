@@ -93,16 +93,22 @@ Then load `extension/` as an unpacked extension (`chrome://extensions` → Devel
 
 ### OpenAI configuration
 
-One `OPENAI_API_KEY` covers chat, web search, and shelf memory. SideKick calls the Chat Completions API with function tools and defaults to `gpt-5-mini`.
+One `OPENAI_API_KEY` covers chat, web search, and shelf memory. SideKick calls the Chat Completions API with function tools. The model comes from `OPENAI_MODEL` in `backend/.env` (`gpt-5-mini` only when it is unset). The server re-reads `backend/.env` whenever it changes, so switching models needs no restart.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OPENAI_API_KEY` | — | Required. |
-| `OPENAI_MODEL` | `gpt-5-mini` | Any Chat Completions model with tool calling. A carried-over `openai/…` prefix is stripped. |
+| `OPENAI_MODEL` | `gpt-5-mini` | Any Chat Completions model with tool calling. On `api.openai.com` a carried-over `openai/…` prefix is stripped; through a gateway the ID is sent as written (e.g. `anthropic/claude-sonnet-4.5` on OpenRouter). |
 | `OPENAI_REASONING_EFFORT` | model default | `minimal`, `low`, `medium`, or `high`, for reasoning models. |
 | `OPENAI_TEMPERATURE` | unset | Only sent when set. GPT-5 and o-series models reject any value but the default, so leave it unset for them. |
 | `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID` | unset | Sent as `OpenAI-Organization` / `OpenAI-Project` headers. |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Point at Azure OpenAI or another OpenAI-compatible gateway. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Point at Azure OpenAI or another OpenAI-compatible gateway (OpenRouter, LiteLLM, …). |
+
+### Saving tokens
+
+- **Local answers.** Small talk such as "who are you?", "what can you do?", "which model are you?", greetings, and thanks is answered by the backend without calling the model (`backend/src/local-answers.js`).
+- **Tools only when needed.** The tool definitions add roughly 3k prompt tokens. A turn that does not mention the shelf, prices, deals, history, or the web (and is not a follow-up like "why that one?") is sent with a short system prompt and no tools.
+- **Token counter.** Above the chat box the panel shows an estimate for the next message, the tokens this conversation has used, and the all-time total. Each answer notes what it cost. "Clear" resets the conversation count; the total keeps counting. Counts come from the `usage` the API reports, including SideKick's web searches.
 
 ### Web search configuration
 

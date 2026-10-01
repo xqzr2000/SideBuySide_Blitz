@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSystemPrompt, runSideKick } from '../src/agent.js';
+import { buildSystemPrompt, needsTools, runSideKick } from '../src/agent.js';
+import { localAnswer } from '../src/local-answers.js';
+import { openAiModel } from '../src/openai.js';
 
 const items = [
   { id: 'a', name: 'Acme Headphones One', price: 100, currency: 'CAD', site: 'store-a.com' },
@@ -86,7 +88,7 @@ test('runSideKick reports a tool failure back to the model instead of crashing',
 
 test('runSideKick refuses to run without an OpenAI key', async () => {
   await assert.rejects(
-    () => runSideKick({ history: [{ role: 'user', content: 'hi' }], items, env: {} }),
+    () => runSideKick({ history: [{ role: 'user', content: 'compare my shelf' }], items, env: {} }),
     /OPENAI_API_KEY/
   );
 });
@@ -99,7 +101,7 @@ test('runSideKick calls OpenAI Chat Completions without a temperature by default
   };
 
   await runSideKick({
-    history: [{ role: 'user', content: 'hi' }],
+    history: [{ role: 'user', content: 'compare my shelf' }],
     items,
     env: { OPENAI_API_KEY: 'sk-test', OPENAI_PROJECT_ID: 'proj_1' },
     fetchImpl
@@ -122,7 +124,7 @@ test('runSideKick honours model, base URL, temperature, and reasoning settings',
   };
 
   await runSideKick({
-    history: [{ role: 'user', content: 'hi' }],
+    history: [{ role: 'user', content: 'compare my shelf' }],
     items,
     env: {
       OPENAI_API_KEY: 'k',
@@ -135,7 +137,8 @@ test('runSideKick honours model, base URL, temperature, and reasoning settings',
   });
 
   assert.equal(request.url, 'https://gateway.example.com/v1/chat/completions');
-  assert.equal(request.body.model, 'gpt-4.1-mini');
+  // A gateway such as OpenRouter needs the provider prefix, so it is passed through.
+  assert.equal(request.body.model, 'openai/gpt-4.1-mini');
   assert.equal(request.body.temperature, 0.2);
   assert.equal(request.body.reasoning_effort, 'low');
 });
@@ -179,7 +182,77 @@ test('runSideKick strips response-only fields and foreign roles from the transcr
 test('runSideKick surfaces OpenAI error messages with their status', async () => {
   const fetchImpl = async () => new Response(JSON.stringify({ error: { message: 'Incorrect API key provided.' } }), { status: 401 });
   await assert.rejects(
-    () => runSideKick({ history: [{ role: 'user', content: 'hi' }], items, env: { OPENAI_API_KEY: 'bad' }, fetchImpl }),
+    () => runSideKick({ history: [{ role: 'user', content: 'compare my shelf' }], items, env: { OPENAI_API_KEY: 'bad' }, fetchImpl }),
     (error) => error.statusCode === 401 && /Incorrect API key/.test(error.message)
   );
+});
+
+test('OPENAI_MODEL picks the model, and the openai/ prefix is only stripped for OpenAI itself', () => {
+  assert.equal(openAiModel({}), 'gpt-5-mini');
+  assert.equal(openAiModel({ OPENAI_MODEL: 'gpt-4.1' }), 'gpt-4.1');
+  assert.equal(openAiModel({ OPENAI_MODEL: 'openai/gpt-4.1' }), 'gpt-4.1');
+  assert.equal(
+    openAiModel({ OPENAI_MODEL: 'anthropic/claude-sonnet-4.5', OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' }),
+    'anthropic/claude-sonnet-4.5'
+  );
+});
+
+test('localAnswer handles small talk without the model and leaves real questions alone', () => {
+  assert.equal(localAnswer('Who are you?').id, 'identity');
+  assert.equal(localAnswer('what can you do').id, 'capabilities');
+  assert.equal(localAnswer('Hi!', { items }).id, 'greeting');
+  assert.match(localAnswer('Hi!', { items }).message, /2 items/);
+  assert.equal(localAnswer('thanks').id, 'thanks');
+  assert.match(localAnswer('which model are you?', { env: { OPENAI_MODEL: 'gpt-4.1' } }).message, /gpt-4\.1/);
+  assert.equal(localAnswer('hi, compare my shelf'), null);
+  assert.equal(localAnswer('who are you going to recommend for headphones?'), null);
+});
+
+test('runSideKick answers small talk locally without calling the API', async () => {
+  const result = await runSideKick({
+    history: [{ role: 'user', content: 'Who are you?' }],
+    items,
+    env: {},
+    fetchImpl: async () => { throw new Error('should not be called'); }
+  });
+  assert.equal(result.local, true);
+  assert.equal(result.usage.totalTokens, 0);
+  assert.match(result.message, /SideKick/);
+});
+
+test('needsTools only offers tools when the turn could use them', () => {
+  assert.equal(needsTools([{ role: 'user', content: 'compare my shelf' }]), true);
+  assert.equal(needsTools([{ role: 'user', content: 'find a cheaper price for the headphones' }]), true);
+  assert.equal(needsTools([{ role: 'user', content: 'tell me a joke' }]), false);
+  assert.equal(needsTools([{ role: 'user', content: 'what does OLED mean?' }]), false);
+  assert.equal(needsTools([
+    { role: 'user', content: 'compare my shelf' },
+    { role: 'assistant', content: 'A is cheaper.' },
+    { role: 'user', content: 'why that one?' }
+  ]), true);
+});
+
+test('runSideKick skips tool definitions when none are needed and reports token usage', async () => {
+  let request = null;
+  const fetchImpl = async (_url, options) => {
+    request = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: 'A joke.' } }],
+      usage: { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 }
+    }), { headers: { 'Content-Type': 'application/json' } });
+  };
+
+  const result = await runSideKick({
+    history: [{ role: 'user', content: 'tell me a joke' }],
+    items,
+    env: { OPENAI_API_KEY: 'k', OPENAI_MODEL: 'gpt-4.1-nano' },
+    fetchImpl
+  });
+
+  assert.equal('tools' in request, false);
+  assert.equal('tool_choice' in request, false);
+  assert.equal(request.model, 'gpt-4.1-nano');
+  assert.equal(result.toolsOffered, false);
+  assert.equal(result.model, 'gpt-4.1-nano');
+  assert.deepEqual(result.usage, { promptTokens: 120, completionTokens: 30, totalTokens: 150, requests: 1 });
 });

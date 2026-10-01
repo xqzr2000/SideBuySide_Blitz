@@ -18,10 +18,90 @@ const sendButton = document.getElementById('sendButton');
 const chatError = document.getElementById('chatError');
 const clearChatButton = document.getElementById('clearChatButton');
 const suggestions = document.getElementById('suggestions');
+const tokenMeter = document.getElementById('tokenMeter');
+const tokenNext = document.getElementById('tokenNext');
+const tokenDialogue = document.getElementById('tokenDialogue');
+const tokenTotal = document.getElementById('tokenTotal');
 
 let currentItems = [];
 let history = [];
 let dealsByItem = {};
+let tokenUsage = emptyTokenUsage();
+// System prompt and tool definitions the backend adds to every request, from /health.
+let promptOverhead = null;
+let backendModel = '';
+
+function emptyTally() {
+  return { promptTokens: 0, completionTokens: 0, totalTokens: 0, requests: 0 };
+}
+
+function emptyTokenUsage() {
+  return { dialogue: emptyTally(), lifetime: emptyTally(), localAnswers: 0 };
+}
+
+function addTally(tally, usage) {
+  for (const key of Object.keys(emptyTally())) tally[key] += Number(usage?.[key]) || 0;
+}
+
+function formatTokens(value) {
+  const count = Number(value) || 0;
+  if (count < 1000) return String(count);
+  if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
+/** About four characters per token; the same rule the backend uses for its overhead. */
+function estimateTokens(text) {
+  return Math.ceil(String(text || '').length / 4);
+}
+
+/** Estimate what the next request costs: instructions, tools, recent history, and the draft. */
+function estimateNextRequest(draft = chatInput.value) {
+  const recent = history.slice(-20).map((message) => message.content).join('\n');
+  const overhead = promptOverhead ? promptOverhead.systemTokens + promptOverhead.toolTokens : 0;
+  return overhead + estimateTokens(recent) + estimateTokens(draft) + 4 * (Math.min(history.length, 20) + 1);
+}
+
+function renderTokenMeter() {
+  tokenNext.textContent = `≈${formatTokens(estimateNextRequest())}`;
+  tokenDialogue.textContent = formatTokens(tokenUsage.dialogue.totalTokens);
+  tokenTotal.textContent = formatTokens(tokenUsage.lifetime.totalTokens);
+  const { dialogue, lifetime, localAnswers } = tokenUsage;
+  tokenMeter.title = [
+    backendModel ? `Model: ${backendModel}` : '',
+    `This chat: ${dialogue.promptTokens.toLocaleString()} in + ${dialogue.completionTokens.toLocaleString()} out over ${dialogue.requests} API call${dialogue.requests === 1 ? '' : 's'}`,
+    `Total: ${lifetime.promptTokens.toLocaleString()} in + ${lifetime.completionTokens.toLocaleString()} out over ${lifetime.requests} API call${lifetime.requests === 1 ? '' : 's'}`,
+    localAnswers ? `${localAnswers} question${localAnswers === 1 ? '' : 's'} answered locally for free` : '',
+    promptOverhead ? '' : 'Next-message estimate excludes the backend prompt until the backend is reachable.'
+  ].filter(Boolean).join('\n');
+}
+
+async function recordTokenUsage(data) {
+  if (data.local) tokenUsage.localAnswers += 1;
+  if (data.usage) {
+    addTally(tokenUsage.dialogue, data.usage);
+    addTally(tokenUsage.lifetime, data.usage);
+  }
+  await chrome.storage.local.set({ tokenUsage });
+  renderTokenMeter();
+}
+
+/** Fetch the model name and prompt overhead once the chat opens. Best effort. */
+async function loadBackendInfo() {
+  try {
+    const { apiBaseUrl, apiToken } = await getBackendConfig();
+    const response = await fetch(`${apiBaseUrl}/health`, {
+      headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : {}
+    });
+    if (!response.ok) return;
+    const data = await response.json().catch(() => ({}));
+    promptOverhead = data.promptOverhead || null;
+    backendModel = data.model || '';
+  } catch {
+    // The backend may not be running yet; the meter just omits the overhead.
+  }
+  renderTokenMeter();
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -56,10 +136,12 @@ function showStatus(message, kind = '') {
 }
 
 async function loadItems() {
-  const data = await chrome.storage.local.get(['items', 'chatHistory', 'deals']);
+  const data = await chrome.storage.local.get(['items', 'chatHistory', 'deals', 'tokenUsage']);
   currentItems = Array.isArray(data.items) ? data.items : [];
   history = Array.isArray(data.chatHistory) ? data.chatHistory : [];
   dealsByItem = data.deals && typeof data.deals === 'object' ? data.deals : {};
+  tokenUsage = { ...emptyTokenUsage(), ...(data.tokenUsage || {}) };
+  renderTokenMeter();
   renderCards();
   renderChat();
   scheduleMemorySync();
@@ -125,14 +207,29 @@ function renderChat() {
       : 'Add a few shopping items first, then I can compare, organize, and hunt for better deals on them.');
     return;
   }
-  for (const message of history) addMessageElement(message.role, message.content);
+  for (const message of history) addMessageElement(message.role, message.content, false, message.meta);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-function addMessageElement(role, content, pending = false) {
+/** Small footnote under an answer: what it cost and whether it reached the model. */
+function describeCost(meta) {
+  if (!meta) return '';
+  if (meta.local) return 'Answered locally · 0 tokens';
+  const total = Number(meta.totalTokens) || 0;
+  return `${total.toLocaleString()} tokens${meta.toolsOffered === false ? ' · no tools needed' : ''}`;
+}
+
+function addMessageElement(role, content, pending = false, meta = null) {
   const div = document.createElement('div');
   div.className = `message ${role}${pending ? ' pending' : ''}`;
   div.textContent = content;
+  const cost = describeCost(meta);
+  if (cost) {
+    const note = document.createElement('div');
+    note.className = 'message-meta';
+    note.textContent = cost;
+    div.appendChild(note);
+  }
   chatMessages.appendChild(div);
   div.scrollIntoView({ block: 'end' });
   return div;
@@ -222,6 +319,8 @@ function showChat() {
   shelfView.classList.add('hidden');
   chatView.classList.remove('hidden');
   renderChat();
+  renderTokenMeter();
+  if (!promptOverhead) loadBackendInfo();
   setTimeout(() => chatInput.focus(), 0);
 }
 
@@ -310,8 +409,11 @@ suggestions?.addEventListener('click', async (event) => {
 
 clearChatButton.addEventListener('click', async () => {
   history = [];
-  await chrome.storage.local.set({ chatHistory: history });
+  // Clearing starts a new dialogue; the all-time total keeps counting.
+  tokenUsage.dialogue = emptyTally();
+  await chrome.storage.local.set({ chatHistory: history, tokenUsage });
   renderChat();
+  renderTokenMeter();
 });
 
 /** Apply the shelf mutations SideKick asked for: reordering, tagging, and deal results. */
@@ -427,9 +529,16 @@ async function sendToSideKick(content) {
 
     pending.remove();
     const answer = data.message || 'No response returned.';
-    history.push({ role: 'assistant', content: answer });
+    const meta = {
+      local: Boolean(data.local),
+      toolsOffered: data.toolsOffered,
+      totalTokens: data.usage?.totalTokens || 0
+    };
+    history.push({ role: 'assistant', content: answer, meta });
     await chrome.storage.local.set({ chatHistory: history });
-    addMessageElement('assistant', answer);
+    addMessageElement('assistant', answer, false, meta);
+    if (data.model) backendModel = data.model;
+    await recordTokenUsage(data);
     await applyActions(data.actions || []);
   } catch (error) {
     pending.remove();
@@ -440,8 +549,11 @@ async function sendToSideKick(content) {
     sendButton.disabled = false;
     chatInput.disabled = false;
     chatInput.focus();
+    renderTokenMeter();
   }
 }
+
+chatInput.addEventListener('input', renderTokenMeter);
 
 chatForm.addEventListener('submit', async (event) => {
   event.preventDefault();
